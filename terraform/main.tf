@@ -227,7 +227,21 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# 7. ECS Cluster & Service
+# 7. CloudWatch Log Group (використовуємо import або спрощену конфігурацію)
+resource "aws_cloudwatch_log_group" "ecs_log_group" {
+  name              = "/ecs/lab1-app"
+  retention_in_days = 7
+
+  lifecycle {
+    ignore_changes = [name]
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_execution_logs_policy" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonCloudWatchLogsFullAccess"
+}
+# 8. ECS Cluster & Service
 resource "aws_ecs_cluster" "main" {
   name = "lab1-ecs-cluster"
 }
@@ -248,6 +262,14 @@ resource "aws_ecs_task_definition" "app" {
       containerPort = 5000
       hostPort      = 5000
     }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = "/ecs/lab1-app"
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
     environment = [
       { name = "DB_HOST", value = aws_db_instance.mysql.address },
       { name = "DB_NAME", value = "kindergartens" },
@@ -277,4 +299,68 @@ resource "aws_ecs_service" "main" {
   }
 
   depends_on = [aws_lb_listener.http]
+}
+
+# 9. OIDC Provider для GitHub Actions (Завдання 5: Безпарольний доступ)
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+# IAM Роль для GitHub Actions з прив'язкою до alinakoman6-dot/cloud-lab1
+resource "aws_iam_role" "github_actions" {
+  name = "github-actions-ecs-deploy-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Condition = {
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:alinakoman6-dot/cloud-lab1:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Політика прав для GitHub Actions (ECR push + ECS service update)
+resource "aws_iam_role_policy" "github_actions_policy" {
+  name = "github-actions-ecs-policy"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecs:UpdateService",
+          "ecs:DescribeServices"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Вивід результатів
+output "github_actions_role_arn" {
+  value       = aws_iam_role.github_actions.arn
+  description = "ARN ролі для використання в GitHub Actions"
 }
