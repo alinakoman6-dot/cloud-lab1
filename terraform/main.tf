@@ -270,7 +270,8 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_HOST", value = aws_db_instance.mysql.address },
       { name = "DB_NAME", value = "kindergartens" },
       { name = "DB_USER", value = "root" },
-      { name = "DB_PASSWORD", value = var.db_password }
+      { name = "DB_PASSWORD", value = var.db_password },
+      { name = "JWT_SECRET_KEY", value = "super-secret-key-123" }
     ]
   }])
 }
@@ -353,6 +354,23 @@ resource "aws_iam_role_policy" "github_actions_policy" {
       }
     ]
   })
+}
+
+# 10. AWS Budget (Захист від перевищення витрат)
+resource "aws_budgets_budget" "cost" {
+  name              = "lab1-monthly-budget"
+  budget_type       = "COST"
+  limit_amount      = "5"
+  limit_unit        = "USD"
+  time_unit         = "MONTHLY"
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 80
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["alina.admin@example.com"] # Замініть на ваш реальний email
+  }
 }
 
 # Вивід результатів
