@@ -3,3 +3,4 @@ mysql-connector-python==9.5.0
 gunicorn==23.0.0
 pymysql
 cryptography
+flasgger

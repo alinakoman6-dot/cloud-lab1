@@ -1,64 +1,97 @@
 import os
-import re
+from flask import Flask, jsonify, request
+from flasgger import Swagger
 import pymysql
-from app import create_app
 
-app = create_app()
+app = Flask(__name__)
 
-def execute_sql_file(cursor, filepath):
-    if not os.path.exists(filepath):
-        return
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
+# Ініціалізація Swagger UI
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": 'apispec',
+            "route": '/apispec.json',
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda model: True,
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "specs_route": "/apidocs/"
+}
 
-    # Спеціальна обробка для файлів із DELIMITER (процедури, тригери)
-    if 'DELIMITER' in content:
-        # Видаляємо всі оголошення DELIMITER
-        content_clean = re.sub(r'DELIMITER\s+\$\$', '', content, flags=re.IGNORECASE)
-        content_clean = re.sub(r'DELIMITER\s+;', '', content_clean, flags=re.IGNORECASE)
-        statements = content_clean.split('$$')
-    else:
-        statements = content.split(';')
+template = {
+    "swagger": "2.0",
+    "info": {
+        "title": "Kindergartens REST API",
+        "description": "API для управління дитячими садками, вихованцями та працівниками",
+        "version": "1.0.0"
+    }
+}
 
-    for stmt in statements:
-        stmt_stripped = stmt.strip()
-        if stmt_stripped:
-            try:
-                cursor.execute(stmt_stripped)
-            except Exception as e:
-                print(f"SQL statement notice: {e}")
+swagger = Swagger(app, config=swagger_config, template=template)
 
-def init_db():
-    db_host = os.environ.get('DB_HOST')
-    db_user = os.environ.get('DB_USER', 'root')
-    db_password = os.environ.get('DB_PASSWORD')
-    db_name = os.environ.get('DB_NAME', 'kindergartens')
-
-    if not db_host or not db_password:
-        print("DB configuration missing, skipping init")
-        return
-
-    print(f"Connecting to RDS at {db_host}...")
-    conn = pymysql.connect(
-        host=db_host,
-        user=db_user,
-        password=db_password,
-        autocommit=True
+def get_db_connection():
+    return pymysql.connect(
+        host=os.environ.get('DB_HOST'),
+        user=os.environ.get('DB_USER', 'root'),
+        password=os.environ.get('DB_PASSWORD'),
+        database=os.environ.get('DB_NAME', 'kindergartens'),
+        cursorclass=pymysql.cursors.DictCursor
     )
-    cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`;")
-    cursor.execute(f"USE `{db_name}`;")
 
-    print("Applying db/01_init.sql...")
-    execute_sql_file(cursor, 'db/01_init.sql')
+@app.route('/health', methods=['GET'])
+def health():
+    """
+    Health check ендпоінт
+    ---
+    responses:
+      200:
+        description: Повертає статус OK для ALB health check
+    """
+    return jsonify({"status": "ok"}), 200
 
-    print("Applying db/02_routines.sql...")
-    execute_sql_file(cursor, 'db/02_routines.sql')
+@app.route('/children', methods=['GET'])
+def get_children():
+    """
+    Отримання списку всіх вихованців
+    ---
+    responses:
+      200:
+        description: Список вихованців із бази даних
+      500:
+        description: Помилка з'єднання з базой даних
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM children;")
+            result = cursor.fetchall()
+        conn.close()
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    cursor.close()
-    conn.close()
-    print("Database migration completed successfully!")
+@app.route('/employees', methods=['GET'])
+def get_employees():
+    """
+    Отримання списку всіх працівників
+    ---
+    responses:
+      200:
+        description: Список працівників із бази даних
+      500:
+        description: Помилка з'єднання з базой даних
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM employees;")
+            result = cursor.fetchall()
+        conn.close()
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    init_db()
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
