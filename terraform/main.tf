@@ -237,10 +237,6 @@ resource "aws_cloudwatch_log_group" "ecs_log_group" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "ecs_execution_logs_policy" {
-  role       = aws_iam_role.ecs_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonCloudWatchLogsFullAccess"
-}
 # 8. ECS Cluster & Service
 resource "aws_ecs_cluster" "main" {
   name = "lab1-ecs-cluster"
