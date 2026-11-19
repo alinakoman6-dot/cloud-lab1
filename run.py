@@ -267,26 +267,5 @@ def get_employees():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/admin/init-db', methods=['POST'])
-@token_required
-def init_db():
-    """ТИМЧАСОВО: завантаження схеми. Видалити після використання."""
-    from pathlib import Path
-    sql = (Path(__file__).parent / 'db' / '01_init.sql').read_text(encoding='utf-8')
-    errors = []
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            for stmt in sql.split(';'):
-                if stmt.strip():
-                    try:
-                        cursor.execute(stmt)
-                    except Exception as e:
-                        errors.append(str(e))
-        conn.commit()
-    finally:
-        conn.close()
-    return jsonify({"errors": errors}), 200
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
