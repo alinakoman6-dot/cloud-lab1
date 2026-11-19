@@ -46,6 +46,7 @@ template = {
 
 swagger = Swagger(app, config=swagger_config, template=template)
 
+
 def get_db_connection():
     return pymysql.connect(
         host=os.environ.get('DB_HOST'),
@@ -54,6 +55,17 @@ def get_db_connection():
         database=os.environ.get('DB_NAME', 'kindergartens'),
         cursorclass=pymysql.cursors.DictCursor
     )
+
+
+def db_fetch(sql, params=None, one=False):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone() if one else cursor.fetchall()
+    finally:
+        conn.close()
+
 
 # Декоратор для перевірки JWT
 def token_required(f):
@@ -78,6 +90,7 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
+
 @app.route('/health', methods=['GET'])
 def health():
     """
@@ -88,6 +101,7 @@ def health():
         description: Повертає статус OK
     """
     return jsonify({"status": "ok"}), 200
+
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -128,29 +142,105 @@ def login():
 
     return jsonify({'message': 'Невірний логін або пароль!'}), 401
 
+
 @app.route('/children', methods=['GET'])
 @token_required
 def get_children():
     """
-    Отримання списку вихованців (Захищено JWT)
+    Список вихованців (Захищено JWT)
     ---
     security:
       - Bearer: []
     responses:
       200:
-        description: Список вихованців
-      401:
-        description: Токен відсутній або недійсний
+        description: Список вихованців (до 100, параметр limit до 500)
     """
+    limit = min(request.args.get('limit', default=100, type=int), 500)
+    try:
+        return jsonify(db_fetch("SELECT * FROM children ORDER BY child_id LIMIT %s;", (limit,))), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/children', methods=['POST'])
+@token_required
+def create_child():
+    """
+    Створення вихованця (Захищено JWT)
+    ---
+    security:
+      - Bearer: []
+    responses:
+      201:
+        description: Вихованця створено
+    """
+    data = request.get_json() or {}
+    conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM children;")
-            result = cursor.fetchall()
-        conn.close()
-        return jsonify(result), 200
+            cursor.execute(
+                "INSERT INTO children (first_name, last_name, birth_date) VALUES (%s, %s, %s)",
+                (data['first_name'], data['last_name'], data['birth_date']),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+        return jsonify({"message": "Child created", "id": new_id}), 201
+    except KeyError as e:
+        return jsonify({"error": f"Відсутнє поле {e}"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route('/children/<int:child_id>', methods=['GET'])
+@token_required
+def get_child(child_id):
+    """
+    Один вихованець (Захищено JWT)
+    ---
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Дані вихованця
+      404:
+        description: Не знайдено
+    """
+    try:
+        child = db_fetch("SELECT * FROM children WHERE child_id = %s;", (child_id,), one=True)
+        if child:
+            return jsonify(child), 200
+        return jsonify({"error": "Child not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/children/<int:child_id>/parents', methods=['GET'])
+@token_required
+def get_child_parents(child_id):
+    """
+    Батьки вихованця (Захищено JWT)
+    ---
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Список батьків
+    """
+    try:
+        rows = db_fetch(
+            "SELECT p.parent_id, p.first_name, p.last_name, p.phone_number, p.email, cp.relation_type "
+            "FROM parents p JOIN child_parents cp ON cp.parent_id = p.parent_id "
+            "WHERE cp.child_id = %s;",
+            (child_id,),
+        )
+        return jsonify(rows), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route('/employees', methods=['GET'])
 @token_required
@@ -175,6 +265,7 @@ def get_employees():
         return jsonify(result), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
