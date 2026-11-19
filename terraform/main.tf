@@ -12,7 +12,7 @@ provider "aws" {
   region = var.aws_region
 }
 
-# 1. VPC та Мережа (Завдання 3: Мережева ізоляція)
+# 1. VPC та Мережа: мережева ізоляція
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
@@ -83,7 +83,7 @@ resource "aws_route_table_association" "pub_2" {
   route_table_id = aws_route_table.public.id
 }
 
-# 2. Security Groups
+# 2. Security Groups: Правила файрволу
 resource "aws_security_group" "alb_sg" {
   name        = "lab1-alb-sg"
   description = "Allow HTTP to ALB"
@@ -144,14 +144,14 @@ resource "aws_security_group" "db_sg" {
   }
 }
 
-# 3. ECR Repository (Завдання 2)
+# 3. ECR Repository: Реєстр контейнерів
 resource "aws_ecr_repository" "app" {
   name                 = "cloud-lab1-app"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 }
 
-# 4. RDS Database (Завдання 2 і 3)
+# 4. RDS Database
 resource "aws_db_subnet_group" "rds" {
   name       = "lab1-rds-subnet-group"
   subnet_ids = [aws_subnet.private_1.id, aws_subnet.private_2.id]
@@ -172,7 +172,7 @@ resource "aws_db_instance" "mysql" {
   skip_final_snapshot    = true
 }
 
-# 5. Load Balancer (Завдання 4)
+# 5. Load Balancer: Балансувальник навантаження
 resource "aws_lb" "main" {
   name               = "lab1-alb"
   internal           = false
@@ -227,19 +227,22 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# 7. CloudWatch Log Group (використовуємо import або спрощену конфігурацію)
+# 7. CloudWatch Log Group: історія 
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
   name              = "/ecs/lab1-app"
   retention_in_days = 7
 
-  lifecycle {
-    ignore_changes = [name]
-  }
 }
 
-# 8. ECS Cluster & Service
+# 8. ECS Cluster & Service: опис контейнера
 resource "aws_ecs_cluster" "main" {
   name = "lab1-ecs-cluster"
+
+  # потрібно для лаби 2 (графіки RunningTaskCount / DesiredTaskCount)
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
 }
 
 resource "aws_ecs_task_definition" "app" {
@@ -271,7 +274,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_NAME", value = "kindergartens" },
       { name = "DB_USER", value = "root" },
       { name = "DB_PASSWORD", value = var.db_password },
-      { name = "JWT_SECRET_KEY", value = "super-secret-key-123" }
+      { name = "JWT_SECRET_KEY", value = var.jwt_secret }
     ]
   }])
 }
@@ -295,17 +298,23 @@ resource "aws_ecs_service" "main" {
     container_port   = 5000
   }
 
+  # CI/CD реєструє нові ревізії task definition з тегом = хеш коміту,
+  # тому Terraform не має їх «відкочувати»
+  lifecycle {
+    ignore_changes = [task_definition, desired_count]
+  }
+
   depends_on = [aws_lb_listener.http]
 }
 
-# 9. OIDC Provider для GitHub Actions (Завдання 5: Безпарольний доступ)
+# 9. OIDC Provider для GitHub Actions: безпарольний доступ
 resource "aws_iam_openid_connect_provider" "github" {
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
-# IAM Роль для GitHub Actions з прив'язкою до alinakoman6-dot/cloud-lab1
+# IAM Роль для GitHub Actions з прив'язкою 
 resource "aws_iam_role" "github_actions" {
   name = "github-actions-ecs-deploy-role"
 
@@ -319,8 +328,8 @@ resource "aws_iam_role" "github_actions" {
           Federated = aws_iam_openid_connect_provider.github.arn
         }
         Condition = {
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:alinakoman6-dot/cloud-lab1:*"
+          StringEquals = {
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
           }
         }
       }
@@ -337,20 +346,41 @@ resource "aws_iam_role_policy" "github_actions_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid      = "EcrLogin"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPush"
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage",
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
+          "ecr:CompleteLayerUpload"
+        ]
+        Resource = aws_ecr_repository.app.arn
+      },
+      {
+        Sid    = "EcsDeploy"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeServices",
           "ecs:UpdateService",
-          "ecs:DescribeServices"
+          "ecs:DescribeTaskDefinition",
+          "ecs:RegisterTaskDefinition"
         ]
         Resource = "*"
+      },
+      {
+        Sid      = "PassExecutionRole"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = aws_iam_role.ecs_execution.arn
       }
     ]
   })
@@ -369,7 +399,7 @@ resource "aws_budgets_budget" "cost" {
     threshold                  = 80
     threshold_type             = "PERCENTAGE"
     notification_type          = "ACTUAL"
-    subscriber_email_addresses = ["alina.admin@example.com"] # Замініть на ваш реальний email
+    subscriber_email_addresses = [var.alert_email]
   }
 }
 
@@ -377,4 +407,30 @@ resource "aws_budgets_budget" "cost" {
 output "github_actions_role_arn" {
   value       = aws_iam_role.github_actions.arn
   description = "ARN ролі для використання в GitHub Actions"
+}
+
+resource "aws_appautoscaling_target" "ecs" {
+  service_namespace  = "ecs"
+  scalable_dimension = "ecs:service:DesiredCount"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.main.name}"
+  min_capacity       = 1
+  max_capacity       = 3
+}
+
+resource "aws_appautoscaling_policy" "cpu" {
+  name               = "lab2-cpu-target-tracking"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.ecs.service_namespace
+  scalable_dimension = aws_appautoscaling_target.ecs.scalable_dimension
+  resource_id        = aws_appautoscaling_target.ecs.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = 60
+    scale_out_cooldown = 60   
+    scale_in_cooldown  = 300
+    
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
 }
