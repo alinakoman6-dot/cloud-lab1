@@ -134,4 +134,6 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
 
   alarm_actions = [aws_sns_topic.alerts.arn]  # лист при перевантаженні
   ok_actions    = [aws_sns_topic.alerts.arn]  # лист при поверненні до норми
+
+  depends_on = [aws_ecs_service.main]
 }
